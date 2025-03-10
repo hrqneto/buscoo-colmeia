@@ -1,0 +1,4 @@
+fastapi
+weaviate-client
+sentence-transformers
+uvicorn
