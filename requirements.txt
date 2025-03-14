@@ -1,4 +1,9 @@
+weaviate-client>=4.0.0
 fastapi
-weaviate-client
-sentence-transformers
 uvicorn
+sentence-transformers
+openai-clip
+torch
+torchvision
+pillow
+numpy
