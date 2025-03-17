@@ -1,5 +1,5 @@
 import weaviate
-from config import WCD_URL, get_auth
+from src.config import WCD_URL, get_auth
 
 def create_weaviate_client():
     """Inicializa o cliente Weaviate."""

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from weaviate_client import client
-import routes
+from src.services.weaviate_client import client
+from src.routes import router
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -14,7 +14,7 @@ async def lifespan(app: FastAPI):
             client.close()
 
 app = FastAPI(lifespan=lifespan)
-app.include_router(routes.router)
+app.include_router(router)
 
 if __name__ == "__main__":
     import uvicorn
