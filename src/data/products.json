@@ -1,0 +1,37 @@
+[
+  {
+      "id": "123",
+      "title": "Notebook Dell Inspiron",
+      "description": "Notebook potente com processador Intel i7 e SSD de 512GB.",
+      "price": 4299.99,
+      "brand": "Dell"
+  },
+  {
+      "id": "124",
+      "title": "Smartphone Samsung Galaxy S23",
+      "description": "Celular de última geração com câmera tripla e 256GB de armazenamento.",
+      "price": 5499.90,
+      "brand": "Samsung"
+  },
+  {
+      "id": "125",
+      "title": "Fone de Ouvido Bluetooth JBL",
+      "description": "Fone com cancelamento de ruído e bateria de longa duração.",
+      "price": 349.99,
+      "brand": "JBL"
+  },
+  {
+      "id": "126",
+      "title": "Monitor LG UltraWide",
+      "description": "Monitor de 34 polegadas com resolução 4K e tecnologia IPS.",
+      "price": 2599.00,
+      "brand": "LG"
+  },
+  {
+      "id": "127",
+      "title": "Teclado Mecânico Redragon",
+      "description": "Teclado gamer com switches mecânicos e iluminação RGB.",
+      "price": 299.90,
+      "brand": "Redragon"
+  }
+]
