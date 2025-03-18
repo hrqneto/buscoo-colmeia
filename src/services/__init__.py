@@ -8,5 +8,6 @@ __all__ = [
     "index_products",
     "search_products",
     "process_and_index_csv",
-    "create_weaviate_client"
+    "create_weaviate_client",
+    
 ]
