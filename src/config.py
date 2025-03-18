@@ -27,19 +27,19 @@ def create_collection(client):
                 name="title_vector",
                 source_properties=["title", "description"],
                 model="Snowflake/snowflake-arctic-embed-l-v2.0",
-                weight=1.0  # Menor peso para título e descrição
+                weight=0.9  # Menor peso para título e descrição
             ),
             Configure.NamedVectors.text2vec_weaviate(
                 name="category_vector",
                 source_properties=["category"],
                 model="Snowflake/snowflake-arctic-embed-l-v2.0",
-                weight=1.2 #  Peso intermediário 
+                weight=1.3 #  Peso intermediário 
             ),
             Configure.NamedVectors.text2vec_weaviate(
                 name="specs_vector",
                 source_properties=["specs"],
                 model="Snowflake/snowflake-arctic-embed-l-v2.0",
-                weight=0.9  #  Peso intermediário para especificações técnicas
+                weight=1.0  #  Peso intermediário para especificações técnicas
             )
         ],
     )
