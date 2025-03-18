@@ -1,0 +1,14 @@
+version: '3.4'
+services:
+  weaviate:
+    image: semitechnologies/weaviate:latest
+    container_name: weaviate
+    restart: always
+    ports:
+      - "8080:8080"
+    environment:
+      AUTHENTICATION_ANONYMOUS_ACCESS_ENABLED: "true"
+      PERSISTENCE_DATA_PATH: "/var/lib/weaviate"
+      QUERY_DEFAULTS_LIMIT: "50"
+      ENABLE_MODULES: "text2vec-openai"
+      OPENAI_APIKEY: "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"
