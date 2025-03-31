@@ -1,7 +1,11 @@
+# main.py
 from fastapi import FastAPI
 from contextlib import asynccontextmanager
-from src.services.weaviate_client import client
+from src.services.weaviate_client import create_weaviate_client, close_weaviate_client
 from src.routes import router
+from src.utils.redis_client import redis_client
+
+client = create_weaviate_client()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -11,11 +15,7 @@ async def lifespan(app: FastAPI):
     finally:
         if client:
             print("🛑 Fechando conexão com Weaviate...")
-            client.close()
+            close_weaviate_client(client)
 
 app = FastAPI(lifespan=lifespan)
 app.include_router(router)
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
