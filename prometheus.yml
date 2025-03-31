@@ -1,0 +1,11 @@
+global:
+  scrape_interval: 5s
+
+scrape_configs:
+  - job_name: 'buscaflex-gateway'
+    static_configs:
+      - targets: ['buscaflex-backend:8085']
+
+  - job_name: 'buscaflex-indexador'
+    static_configs:
+      - targets: ['buscaflex-indexador:8000']
