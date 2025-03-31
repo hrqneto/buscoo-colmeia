@@ -4,7 +4,7 @@ from transformers import pipeline
 from src.services.weaviate_client import create_weaviate_client
 from src.config import PRODUCT_CLASS
 
-# 🔥 Reranker generalista (mantido por ser excelente e amplamente testado)
+# 🔥 Reranker generalista
 reranker = pipeline("text-classification", model="cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 def remove_duplicates(products):
@@ -65,7 +65,7 @@ def search_products(query: str, limit: int = 50, filters: dict = None):
         client = create_weaviate_client()
         collection = client.collections.get(PRODUCT_CLASS)
 
-        # 🔧 Construção dos filtros (se houver)
+        # 🔧 Construção dos filtros
         filters_clause = build_filters(filters) if filters else None
 
         # 🚨 Corrigido o erro usando 'filters' em vez de 'where'
@@ -105,7 +105,7 @@ def search_products(query: str, limit: int = 50, filters: dict = None):
         produtos = remove_duplicates(produtos)
         print(f"✅ Produtos após remoção de duplicatas: {len(produtos)}")
 
-        # 🚀 Aplicando reranking generalista (modelo mantido)
+        # 🚀 Aplicando reranking generalista
         top_n = min(30, len(produtos))
         ranked_products = []
         for p in produtos[:top_n]:
@@ -118,7 +118,6 @@ def search_products(query: str, limit: int = 50, filters: dict = None):
 
         ranked_products = normalize_scores(ranked_products)
 
-        # 🔥 NOVA LÓGICA para mensagens amigáveis
         MIN_ACCEPTABLE_SCORE = 0.02  # ajuste conforme necessário
         relevant_products = [p for p in ranked_products if p['rerank_score'] >= MIN_ACCEPTABLE_SCORE]
 
