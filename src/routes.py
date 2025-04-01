@@ -1,18 +1,46 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query
+from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query, BackgroundTasks
 from weaviate.classes.query import Filter
 from src.services.upload_service import process_and_index_csv
 from src.services.search_service import search_products
 from src.services.weaviate_client import create_weaviate_client
 from src.services.autocomplete_service import get_autocomplete_suggestions
+from src.utils.redis_client import redis_client
+
+from uuid import uuid4
 
 from src.config import PRODUCT_CLASS
 
 router = APIRouter()
 
-@router.post("/upload-csv")
-async def upload_csv(file: UploadFile = File(...)):
-    from src.services.upload_service import process_and_index_csv
-    return await process_and_index_csv(file)
+@router.post("/upload")
+async def upload_csv(file: UploadFile = File(...), background_tasks: BackgroundTasks = BackgroundTasks()):
+    upload_id = str(uuid4())
+    file_path = f"temp_{upload_id}.csv"
+
+    with open(file_path, "wb") as f:
+        f.write(await file.read())
+
+    # passa só o caminho do arquivo pro background agora
+    background_tasks.add_task(process_and_index_csv, file_path, upload_id)
+
+    return {
+        "upload_id": upload_id,
+        "status": "processing",
+        "message": "📦 Arquivo recebido. Processamento iniciado em background."
+    }
+    
+@router.get("/upload-status/{upload_id}")
+async def get_upload_status(upload_id: str):
+    status = await redis_client.get(f"upload:{upload_id}:status")
+
+    if status is None:
+        raise HTTPException(status_code=404, detail="Upload ID não encontrado")
+
+    if isinstance(status, bytes):
+        status = status.decode()
+
+    return {"upload_id": upload_id, "status": status}
+
 
 @router.get("/search")
 def search(query: str):

@@ -5,6 +5,7 @@ from typing import List, Dict
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import PointStruct, VectorParams, Distance
+from src.services.autocomplete_service import extract_image_from_url
 
 # 🔧 Configurações carregadas do .env
 QDRANT_URL = os.getenv("QDRANT_URL")
@@ -95,9 +96,10 @@ async def index_products(products: List[Dict[str, any]]):
                 description = str(p.get("description", "")).strip()
                 brand = str(p.get("brand", "")).strip()
                 category = str(p.get("category", "")).strip()
-                image = str(p.get("image", "")).strip() if isinstance(p.get("image", ""), str) else ""
+                image = str(p.get("image", "")).strip()
                 url = str(p.get("url", "")).strip()
-
+                if not image or not image.startswith("http"):
+                    image = await extract_image_from_url(url)
                 try:
                     price_str = str(p.get("price", "0")).replace("R$", "").replace("%", "").replace(",", ".").strip()
                     price = float(price_str)

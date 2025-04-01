@@ -3,22 +3,24 @@ import pandas as pd
 from uuid import uuid4
 from fastapi import UploadFile
 from src.services.indexing import index_products
+from src.utils.redis_client import redis_client
 
-async def process_and_index_csv(file: UploadFile):
-    """Recebe um arquivo CSV, processa e indexa os produtos."""
-    file_path = f"temp_{uuid4()}.csv"
+
+async def process_and_index_csv(file_path: str, upload_id: str):
+    """Processa CSV, indexa produtos e salva status da operação no Redis."""
+    file_path = f"temp_{upload_id}.csv"
+
     try:
-        # Salva arquivo temporário
-        with open(file_path, "wb") as f:
-            f.write(await file.read())
+        # 👉 Seta status inicial no Redis
+        await redis_client.set(f"upload:{upload_id}:status", "processing", ex=3600)
 
-        # Tenta múltiplos encodings
+        # 🔎 Tenta múltiplos encodings
         encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'windows-1252']
         df = None
         for encoding in encodings:
             try:
                 df = pd.read_csv(
-                    file_path, 
+                    file_path,
                     encoding=encoding,
                     on_bad_lines='skip',
                     sep=',',
@@ -29,14 +31,13 @@ async def process_and_index_csv(file: UploadFile):
                 continue
 
         if df is None:
+            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
             return {"error": "Falha ao decodificar o arquivo (encoding não reconhecido)"}
 
-        # Verifica se temos as colunas do formato antigo
+        # 🧠 Ajusta colunas
         if 'title' in df.columns and 'brand' in df.columns:
-            # Formato novo já está correto
-            pass
-        elif '""' in df.columns:  # Se for o formato com coluna vazia no início
-            # Mapeamento para o formato do seu output.csv
+            pass  # formato ok
+        elif '""' in df.columns:
             column_mapping = {
                 'title': 'title',
                 'brand': 'brand',
@@ -46,37 +47,39 @@ async def process_and_index_csv(file: UploadFile):
                 'selling_price': 'price',
                 'description': 'description'
             }
-            
-            # Renomeia as colunas
             df = df.rename(columns=column_mapping)
-            
-            # Seleciona apenas as colunas necessárias
             df = df[list(column_mapping.values())]
-            
-            # Garante que a imagem seja uma string (pega a primeira URL se for múltiplas imagens)
+
             if 'image' in df.columns:
                 df['image'] = df['image'].apply(lambda x: x.split(',')[0] if isinstance(x, str) else '')
         else:
+            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
             return {"error": "Formato de CSV não reconhecido"}
 
-        # Conversão segura de preços
+        # 💸 Conversão de preço
         if 'price' in df.columns:
             df['price'] = pd.to_numeric(df['price'], errors='coerce').fillna(0)
         else:
             df['price'] = 0
 
-        # Preenche valores vazios
+        # 🧽 Preenche valores faltantes
         for col in ['description', 'brand', 'category']:
             if col in df.columns:
                 df[col] = df[col].fillna('')
             else:
                 df[col] = ''
 
-        # Remove linhas com título vazio
+        # 🧹 Remove produtos sem título
         df = df[df['title'].notna() & (df['title'].str.strip() != '')]
 
+        # 🚀 Indexa
         response = await index_products(df.to_dict(orient="records"))
+
+        # ✅ Status final
+        await redis_client.set(f"upload:{upload_id}:status", "done", ex=3600)
+
         return {
+            "upload_id": upload_id,
             "message": "Arquivo processado e indexado com sucesso!",
             "details": response,
             "stats": {
@@ -86,9 +89,10 @@ async def process_and_index_csv(file: UploadFile):
         }
 
     except Exception as e:
+        await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
         print(f"❌ Erro ao processar o CSV: {e}")
-        return {"error": f"Erro interno: {str(e)}"}
+        return {"upload_id": upload_id, "error": f"Erro interno: {str(e)}"}
+
     finally:
-        # Garante que o arquivo temporário será removido
         if os.path.exists(file_path):
             os.remove(file_path)
