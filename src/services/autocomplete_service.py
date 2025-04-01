@@ -4,7 +4,6 @@ import logging
 from fastapi import HTTPException
 from src.services.embedding_service import encode_text
 from src.utils.redis_client import redis_client
-from qdrant_client.models import SearchParams
 from src.services.qdrant_client import qdrant
 from collections import Counter
 import httpx
@@ -12,14 +11,11 @@ from bs4 import BeautifulSoup
 from functools import lru_cache
 import asyncio
 import time
-
+from qdrant_client.http.models import SearchRequest
+from qdrant_client.http.models import SearchParams
 
 logger = logging.getLogger(__name__)
 async_client = httpx.AsyncClient(timeout=10.0)
-
-@lru_cache(maxsize=1000)
-def get_cached_image(url: str) -> str:
-    return url
 
 async def extract_image_from_url(url: str) -> str:
     try:
@@ -42,7 +38,10 @@ async def extract_image_from_url(url: str) -> str:
         }
 
         response = await async_client.get(url, headers=headers)
-
+        
+        if "text/html" not in response.headers.get("Content-Type", ""):
+            return ""
+        
         soup = BeautifulSoup(response.text, "html.parser")
         tag = soup.find("meta", property="og:image")
         image_url = tag["content"] if tag and tag.get("content") else ""
@@ -77,14 +76,11 @@ def is_query_valid(q: str) -> bool:
         if count > 2:
             logger.info(f"⛔ Muitas repetições da palavra '{most_common_word}' — ignorada: '{q}'")
             return False
-        
-            # 📏 Rejeita queries com muitas palavras longas nonsense
+
     long_gibberish = [w for w in words if len(w) > 8 and entropy(w) < 1.5]
     if len(long_gibberish) >= 2:
         logger.info(f"⛔ Detecção de palavras longas e ruidosas — ignorando: '{q}'")
         return False
-
-    return True
 
     nonsense_words = 0
     for word in words:
@@ -92,13 +88,10 @@ def is_query_valid(q: str) -> bool:
             ent = entropy(word)
             vowels = sum(1 for c in word if c in "aeiou")
             consonants = sum(1 for c in word if c.isalpha() and c not in "aeiou")
-
-            # ✅ Ajustado: só considera nonsense se vários fatores ruins juntos
             if ent < 1.5 and (vowels < 2 or (consonants > 6 and vowels == 0)):
                 logger.info(f"⛔ Palavra suspeita detectada ('{word}') — entropia {ent:.2f}, vogais: {vowels}, consoantes: {consonants}")
                 nonsense_words += 1
 
-    # 🔒 Bloqueia se houver ruído demais misturado, mesmo com palavra válida no início
     if len(words) > 3 and nonsense_words >= 1:
         percent_ruido = nonsense_words / len(words)
         if percent_ruido >= 0.3:
@@ -117,7 +110,6 @@ def is_query_valid(q: str) -> bool:
         logger.info(f"⛔ Query com ruído e muito longa — ignorada: '{q}'")
         return False
 
-    # 📉 Entropia média das palavras
     if len(words) >= 4:
         avg_ent = sum(entropy(w) for w in words) / len(words)
         if avg_ent < 2.0:
@@ -151,11 +143,10 @@ async def get_autocomplete_suggestions(q: str):
 
     if redis_client:
         typo_fallback = await redis_client.get(f"autocomplete:typo_cache:{q.lower()}")
-        if typo_fallback:
+        if typo_fallback and typo_fallback != q.lower():
             fallback_data = await redis_client.get(f"autocomplete:{typo_fallback}")
             if fallback_data:
                 logger.info(f"🧠 Fallback cache HIT para '{q}' usando '{typo_fallback}'")
-
                 return json.loads(fallback_data)
 
     if not is_query_valid(q):
@@ -177,6 +168,12 @@ async def get_autocomplete_suggestions(q: str):
         q_length = len(q_clean)
         threshold = 0.05
         hnsw = 128
+        
+        # TODO: Atualizar para o novo cliente AsyncQdrantClient com SearchRequest
+        # Substituir qdrant.search(**search_args) por:
+        # await qdrant.search("products", SearchRequest(...))
+        # Requer migrar para qdrant-client 1.6+ com modelos http.models (assíncronos)
+        # ⚠️ Manter como está por ora — estável e funcional com a versão atual.
 
         search_args = {
             "collection_name": "products",
@@ -211,11 +208,17 @@ async def get_autocomplete_suggestions(q: str):
 
         seen = set()
         raw_products = []
+        seen_titles = set()
         for p in result:
             url = p.payload.get("url", "")
             if url in seen:
                 continue
             seen.add(url)
+            
+            title = p.payload.get("title", "")
+            if title in seen_titles:
+                continue
+            seen_titles.add(title)
 
             score = p.score
             logger.info(f"[similaridade] Score para '{p.payload.get('title', '')}': {score}")
