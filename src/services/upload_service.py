@@ -4,18 +4,18 @@ from uuid import uuid4
 from fastapi import UploadFile
 from src.services.indexing import index_products
 from src.utils.redis_client import redis_client
-
+from src.schemas.product_schema import REQUIRED_FIELDS, ALL_FIELDS, detectar_e_mapear_colunas
 
 async def process_and_index_csv(file_path: str, upload_id: str):
-    """Processa CSV, indexa produtos e salva status da operação no Redis."""
+    print(f"📂 Começando processamento do CSV: {file_path} (upload_id={upload_id})")
+
     file_path = f"temp_{upload_id}.csv"
 
     try:
-        # 👉 Seta status inicial no Redis
         await redis_client.set(f"upload:{upload_id}:status", "processing", ex=3600)
 
         # 🔎 Tenta múltiplos encodings
-        encodings = ['utf-8', 'latin-1', 'iso-8859-1', 'windows-1252']
+        encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'iso-8859-1', 'windows-1252']
         df = None
         for encoding in encodings:
             try:
@@ -26,35 +26,36 @@ async def process_and_index_csv(file_path: str, upload_id: str):
                     sep=',',
                     engine='python'
                 )
+                print(f"📊 CSV lido com {len(df)} linhas e colunas: {list(df.columns)}")
+                print("🧪 Primeira linha:")
+                print(df.head(1).to_dict(orient="records")[0] if not df.empty else "CSV vazio")
                 break
             except UnicodeDecodeError:
                 continue
 
         if df is None:
             await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            print("❌ Falha ao decodificar o arquivo.")
             return {"error": "Falha ao decodificar o arquivo (encoding não reconhecido)"}
 
-        # 🧠 Ajusta colunas
-        if 'title' in df.columns and 'brand' in df.columns:
-            pass  # formato ok
-        elif '""' in df.columns:
-            column_mapping = {
-                'title': 'title',
-                'brand': 'brand',
-                'category': 'category',
-                'images': 'image',
-                'url': 'url',
-                'selling_price': 'price',
-                'description': 'description'
-            }
-            df = df.rename(columns=column_mapping)
-            df = df[list(column_mapping.values())]
-
-            if 'image' in df.columns:
-                df['image'] = df['image'].apply(lambda x: x.split(',')[0] if isinstance(x, str) else '')
-        else:
+        if df.empty:
             await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
-            return {"error": "Formato de CSV não reconhecido"}
+            print("❌ CSV está vazio após leitura. Verifique a estrutura.")
+            return {"error": "CSV está vazio."}
+
+        df, erro_mapeamento = detectar_e_mapear_colunas(df)
+        if erro_mapeamento:
+            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            print(erro_mapeamento)
+            return {"error": erro_mapeamento}
+
+        # 🔽 Valida campos obrigatórios
+        if not all(col in df.columns for col in REQUIRED_FIELDS):
+            faltando = [col for col in REQUIRED_FIELDS if col not in df.columns]
+            msg = f"❌ Faltam colunas obrigatórias: {faltando}"
+            print(msg)
+            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            return {"error": msg}
 
         # 💸 Conversão de preço
         if 'price' in df.columns:
@@ -73,9 +74,13 @@ async def process_and_index_csv(file_path: str, upload_id: str):
         df = df[df['title'].notna() & (df['title'].str.strip() != '')]
 
         # 🚀 Indexa
-        response = await index_products(df.to_dict(orient="records"))
+        try:
+            response = await index_products(df.to_dict(orient="records"))
+        except Exception as e:
+            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            print(f"❌ Erro durante indexação: {e}")
+            return {"error": str(e)}
 
-        # ✅ Status final
         await redis_client.set(f"upload:{upload_id}:status", "done", ex=3600)
 
         return {
@@ -90,7 +95,7 @@ async def process_and_index_csv(file_path: str, upload_id: str):
 
     except Exception as e:
         await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
-        print(f"❌ Erro ao processar o CSV: {e}")
+        print(f"❌ Erro geral no processamento: {e}")
         return {"upload_id": upload_id, "error": f"Erro interno: {str(e)}"}
 
     finally:
