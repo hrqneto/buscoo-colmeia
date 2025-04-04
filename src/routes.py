@@ -13,14 +13,13 @@ from src.config import PRODUCT_CLASS
 router = APIRouter()
 
 @router.post("/upload")
-async def upload_csv(file: UploadFile = File(...), background_tasks: BackgroundTasks = BackgroundTasks()):
+async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
     upload_id = str(uuid4())
     file_path = f"temp_{upload_id}.csv"
 
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    # passa só o caminho do arquivo pro background agora
     background_tasks.add_task(process_and_index_csv, file_path, upload_id)
 
     return {
