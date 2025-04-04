@@ -1,11 +1,19 @@
 import os
-import uuid
+from uuid import uuid4
 import asyncio
-from typing import List, Dict
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import PointStruct, VectorParams, Distance
 from src.services.autocomplete_service import extract_image_from_url
+from src.services.image_service import processar_e_enviar_imagem, BUCKET_NAME
+import ast
+import csv
+from src.services.validation_service import validar_produto
+from typing import List, Dict, Tuple
+from src.services.relatorio_service import salvar_relatorio_erros
+import re
+import pandas as pd
+from src.schemas.product_schema import ALL_FIELDS
 
 # 🔧 Configurações carregadas do .env
 QDRANT_URL = os.getenv("QDRANT_URL")
@@ -19,6 +27,19 @@ if not QDRANT_URL or not QDRANT_API_KEY:
 # 🧠 Cliente Qdrant + modelo local
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 model = SentenceTransformer("all-MiniLM-L6-v2")
+
+def smart_split(text):
+    if pd.isna(text):
+        return []
+    
+    # Se já tem separador, usa ele
+    if any(sep in text for sep in [",", ".", "\n", ";"]):
+        parts = re.split(r'[,\.\n;]+', text)
+    else:
+        # Usa regex que divide quando tem uma nova palavra com letra maiúscula
+        parts = re.split(r'(?<=[a-z])(?=[A-Z])', text)
+    
+    return [p.strip() for p in parts if p.strip()]
 
 # 🚀 Cria coleção no Qdrant (se ainda não existe)
 def create_collection_if_not_exists():
@@ -41,6 +62,28 @@ def create_payload_indexes():
         ("price", models.PayloadSchemaType.FLOAT),
         ("uuid", models.PayloadSchemaType.UUID),
         ("description", models.TextIndexParams(
+            type="text",
+            tokenizer=models.TokenizerType.WORD,
+            min_token_len=2,
+            max_token_len=15,
+            lowercase=True
+        )),
+        # 🧠 Indexando campos estruturados com texto tokenizado
+        ("uses", models.TextIndexParams(
+            type="text",
+            tokenizer=models.TokenizerType.WORD,
+            min_token_len=2,
+            max_token_len=15,
+            lowercase=True
+        )),
+        ("side_effects", models.TextIndexParams(
+            type="text",
+            tokenizer=models.TokenizerType.WORD,
+            min_token_len=2,
+            max_token_len=15,
+            lowercase=True
+        )),
+        ("composition", models.TextIndexParams(
             type="text",
             tokenizer=models.TokenizerType.WORD,
             min_token_len=2,
@@ -69,9 +112,32 @@ async def loading_animation():
             await asyncio.sleep(0.1)
     print("\r✅ Indexação concluída!\n")
 
+def check_dataset_schema(products: List[Dict[str, any]], required_fields: List[str] = None):
+    if not products:
+        print("⚠️ Nenhum produto encontrado no dataset.")
+        return False
+
+    if required_fields is None:
+        required_fields = ["title", "brand", "category", "price", "url"]
+
+    sample = products[0]
+    print("🔍 Verificando schema do primeiro produto:")
+    print(sample)
+
+    missing_fields = [field for field in required_fields if field not in sample]
+    if missing_fields:
+        print(f"❌ Campos ausentes no dataset: {missing_fields}")
+        return False
+
+    print("✅ Todos os campos obrigatórios estão presentes.")
+    return True
+
 # 🔁 Função principal de indexação
 async def index_products(products: List[Dict[str, any]]):
     try:
+        if not check_dataset_schema(products):
+            return {"error": "Dataset inválido. Faltam colunas obrigatórias."}
+        print(f"📊 Quantidade total de produtos no CSV: {len(products)}")
         create_collection_if_not_exists()
         create_payload_indexes()
         print("\n🚀 Iniciando indexação...\n")
@@ -80,63 +146,109 @@ async def index_products(products: List[Dict[str, any]]):
         total_indexados = 0
         total_ignorados = 0
         batch_size = 50
-
+        erros = []
+        
         for i in range(0, len(products), batch_size):
             batch = products[i:i + batch_size]
             points: List[PointStruct] = []
+            print(f"🔁 Processando batch {i} - {i + len(batch)}")
 
-            for p in batch:
-                title = str(p.get("title", "")).strip()
-                if not title:
-                    print(f"⚠️ Produto ignorado: Sem título -> {p}")
-                    total_ignorados += 1
-                    continue
+        for p in batch:
+            # 🧼 Preenche campos ausentes com valores padrão
+            for col in ALL_FIELDS:
+                if col not in p:
+                    p[col] = ""
 
-                obj_uuid = str(uuid.uuid4())
-                description = str(p.get("description", "")).strip()
-                brand = str(p.get("brand", "")).strip()
-                category = str(p.get("category", "")).strip()
-                image = str(p.get("image", "")).strip()
+            valido, motivo = validar_produto(p)
+            print(f"➡️ Produto: {p.get('title', '[sem título]')}")
+            
+            if not valido:
+                erros.append({
+                    "produto": p.get("title", ""),
+                    "motivo": motivo,
+                    "dados": p
+                })
+                total_ignorados += 1
+                continue
+
+            obj_uuid = str(uuid4())
+            description = str(p.get("description", "")).strip()
+            brand = str(p.get("brand", "")).strip()
+            category = str(p.get("category", "")).strip()
+
+            # 🧠 Prioriza imagem da coluna `images`, senão usa a `url`
+            raw_images = p.get("images", "[]")
+            try:
+                image_list = ast.literal_eval(raw_images)
+                if isinstance(image_list, list) and image_list and "http" in image_list[0]:
+                    url = image_list[0]
+                else:
+                    url = str(p.get("url", "")).strip()
+            except Exception:
                 url = str(p.get("url", "")).strip()
-                if not image or not image.startswith("http"):
-                    image = await extract_image_from_url(url)
-                try:
-                    price_str = str(p.get("price", "0")).replace("R$", "").replace("%", "").replace(",", ".").strip()
-                    price = float(price_str)
-                except Exception:
-                    price = 0.0
 
+            try:
+                url_final = await asyncio.wait_for(processar_e_enviar_imagem(url, obj_uuid), timeout=5)
+            except asyncio.TimeoutError:
+                print(f"⏰ Timeout ao tentar baixar imagem: {url}")
+                url_final = "Erro - timeout"
 
-                payload = {
-                    "uuid": obj_uuid,
-                    "title": title,
-                    "description": description or "Sem descrição",
-                    "brand": brand or "Desconhecida",
-                    "category": category or "Sem categoria",
-                    "image": image,
-                    "url": url,
-                    "price": price,
-                    "priceText": f"{price} Kč" if price > 0 else "Indisponível"
-                }
+            if url_final.startswith("Erro"):
+                erros.append({
+                    "produto": p.get("title", ""),
+                    "motivo": "Erro na imagem ou imagem pequena",
+                    "dados": p
+                })
+                total_ignorados += 1
+                continue
 
-                # 🔍 Vetorização local
-                text_to_vectorize = f"{title} {brand} {category}"
-                vector = model.encode(text_to_vectorize).tolist()
+            try:
+                price_str = str(p.get("price", "0")).replace("R$", "").replace("%", "").replace(",", ".").strip()
+                price = float(price_str)
+            except Exception:
+                price = 0.0
 
-                points.append(PointStruct(id=obj_uuid, vector=vector, payload=payload))
+            title = str(p.get("title", "")).strip()
+            uses = smart_split(p.get("uses", ""))
+            side_effects = smart_split(p.get("side_effects", ""))
+            composition = smart_split(p.get("composition", ""))
 
-            if points:
-                client.upsert(collection_name=PRODUCT_CLASS, points=points)
-                total_indexados += len(points)
-                print(f"✅ {len(points)} produtos indexados...")
+            payload = {
+                "uuid": obj_uuid,
+                "title": title,
+                "description": description or "Sem descrição",
+                "brand": brand or "Desconhecida",
+                "category": category or "Sem categoria",
+                "image": url_final,
+                "url": url,
+                "price": price,
+                "priceText": f"{price} Kč" if price > 0 else "Indisponível",
+                "uses": uses,
+                "side_effects": side_effects,
+                "composition": composition,
+            }
+
+            text_to_vectorize = f"{title} {brand} {category} {' '.join(uses)} {' '.join(composition)}"
+            vector = model.encode(text_to_vectorize).tolist()
+
+            points.append(PointStruct(id=obj_uuid, vector=vector, payload=payload))
+
+        if points:
+            client.upsert(collection_name=PRODUCT_CLASS, points=points)
+            total_indexados += len(points)
+            print(f"✅ {len(points)} produtos indexados...")
 
         print(f"\n🚀 Final: {total_indexados} indexados, {total_ignorados} ignorados.")
+
+        if erros:
+            salvar_relatorio_erros(erros)
+            print(f"📝 Relatório de erros salvo com {len(erros)} itens.")
+
         return {
             "message": "✅ CSV processado!",
             "adicionados": total_indexados,
             "ignorados": total_ignorados
         }
-
     except Exception as e:
         print(f"❌ Erro ao indexar produtos: {e}")
         return {"error": str(e)}
