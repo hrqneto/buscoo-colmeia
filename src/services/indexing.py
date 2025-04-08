@@ -6,7 +6,7 @@ from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import PointStruct, VectorParams, Distance
 from src.services.autocomplete_service import extract_image_from_url
 from src.services.image_service import processar_e_enviar_imagem, BUCKET_NAME
-import ast
+from ast import literal_eval
 import csv
 from src.services.validation_service import validar_produto
 from typing import List, Dict, Tuple
@@ -14,6 +14,8 @@ from src.services.relatorio_service import salvar_relatorio_erros
 import re
 import pandas as pd
 from src.schemas.product_schema import ALL_FIELDS
+from src.services.normalizacao_service import normalizar_dataset
+import ast
 
 # 🔧 Configurações carregadas do .env
 QDRANT_URL = os.getenv("QDRANT_URL")
@@ -28,6 +30,14 @@ if not QDRANT_URL or not QDRANT_API_KEY:
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
+def safe_parse_images(value):
+    if isinstance(value, list):
+        return value
+    try:
+        return ast.literal_eval(value)
+    except Exception as e:
+        print(f"Erro ao converter imagens: {value} -> {e}")
+        return []
 def smart_split(text):
     if pd.isna(text):
         return []
@@ -135,6 +145,7 @@ def check_dataset_schema(products: List[Dict[str, any]], required_fields: List[s
 # 🔁 Função principal de indexação
 async def index_products(products: List[Dict[str, any]]):
     try:
+        products = normalizar_dataset(products)
         if not check_dataset_schema(products):
             return {"error": "Dataset inválido. Faltam colunas obrigatórias."}
         print(f"📊 Quantidade total de produtos no CSV: {len(products)}")
@@ -153,90 +164,97 @@ async def index_products(products: List[Dict[str, any]]):
             points: List[PointStruct] = []
             print(f"🔁 Processando batch {i} - {i + len(batch)}")
 
-        for p in batch:
-            # 🧼 Preenche campos ausentes com valores padrão
-            for col in ALL_FIELDS:
-                if col not in p:
-                    p[col] = ""
+            for p in batch:
+                # 🧼 Preenche campos ausentes com valores padrão
+                for col in ALL_FIELDS:
+                    if col not in p:
+                        p[col] = ""
 
-            valido, motivo = validar_produto(p)
-            print(f"➡️ Produto: {p.get('title', '[sem título]')}")
-            
-            if not valido:
-                erros.append({
-                    "produto": p.get("title", ""),
-                    "motivo": motivo,
-                    "dados": p
-                })
-                total_ignorados += 1
-                continue
+                valido, motivo = validar_produto(p)
+                print(f"➡️ Produto: {p.get('title', '[sem título]')}")
+                
+                if not valido:
+                    erros.append({
+                        "produto": p.get("title", ""),
+                        "motivo": motivo,
+                        "dados": p
+                    })
+                    total_ignorados += 1
+                    continue
 
-            obj_uuid = str(uuid4())
-            description = str(p.get("description", "")).strip()
-            brand = str(p.get("brand", "")).strip()
-            category = str(p.get("category", "")).strip()
+                obj_uuid = str(uuid4())
+                description = str(p.get("description", "")).strip()
+                brand = str(p.get("brand", "")).strip()
+                category = str(p.get("category", "")).strip()
 
-            # 🧠 Prioriza imagem da coluna `images`, senão usa a `url`
-            raw_images = p.get("images", "[]")
-            try:
-                image_list = ast.literal_eval(raw_images)
-                if isinstance(image_list, list) and image_list and "http" in image_list[0]:
-                    url = image_list[0]
-                else:
-                    url = str(p.get("url", "")).strip()
-            except Exception:
-                url = str(p.get("url", "")).strip()
+                images = safe_parse_images(p.get("images", []))
+                print(f"✅ Lista final de imagens ({len(images)}): {images}")
 
-            try:
-                url_final = await asyncio.wait_for(processar_e_enviar_imagem(url, obj_uuid), timeout=5)
-            except asyncio.TimeoutError:
-                print(f"⏰ Timeout ao tentar baixar imagem: {url}")
-                url_final = "Erro - timeout"
+                # 🧼 Filtra apenas URLs de imagem válidas
+                valid_images = [img for img in images if isinstance(img, str) and img.startswith("http") and img.lower().endswith((".jpg", ".jpeg", ".png"))]
 
-            if url_final.startswith("Erro"):
-                erros.append({
-                    "produto": p.get("title", ""),
-                    "motivo": "Erro na imagem ou imagem pequena",
-                    "dados": p
-                })
-                total_ignorados += 1
-                continue
+                if not valid_images:
+                    print(f"⚠️ Nenhuma imagem válida para o produto: {p.get('title')}")
+                    erros.append({
+                        "produto": p.get("title", ""),
+                        "motivo": "Nenhuma imagem válida encontrada",
+                        "dados": p
+                    })
+                    total_ignorados += 1
+                    continue
 
-            try:
-                price_str = str(p.get("price", "0")).replace("R$", "").replace("%", "").replace(",", ".").strip()
-                price = float(price_str)
-            except Exception:
-                price = 0.0
+                url = valid_images[0]
 
-            title = str(p.get("title", "")).strip()
-            uses = smart_split(p.get("uses", ""))
-            side_effects = smart_split(p.get("side_effects", ""))
-            composition = smart_split(p.get("composition", ""))
+                try:
+                    url_final = await asyncio.wait_for(processar_e_enviar_imagem(url, obj_uuid), timeout=5)
+                except asyncio.TimeoutError:
+                    print(f"⏰ Timeout ao tentar baixar imagem: {url}")
+                    url_final = "Erro - timeout"
 
-            payload = {
-                "uuid": obj_uuid,
-                "title": title,
-                "description": description or "Sem descrição",
-                "brand": brand or "Desconhecida",
-                "category": category or "Sem categoria",
-                "image": url_final,
-                "url": url,
-                "price": price,
-                "priceText": f"{price} Kč" if price > 0 else "Indisponível",
-                "uses": uses,
-                "side_effects": side_effects,
-                "composition": composition,
-            }
+                if url_final.startswith("Erro"):
+                    erros.append({
+                        "produto": p.get("title", ""),
+                        "motivo": "Erro na imagem ou imagem pequena",
+                        "dados": p
+                    })
+                    total_ignorados += 1
+                    continue
 
-            text_to_vectorize = f"{title} {brand} {category} {' '.join(uses)} {' '.join(composition)}"
-            vector = model.encode(text_to_vectorize).tolist()
+                try:
+                    price_str = str(p.get("price", "0")).replace("R$", "").replace("%", "").replace(",", ".").strip()
+                    price = float(price_str)
+                except Exception:
+                    price = 0.0
 
-            points.append(PointStruct(id=obj_uuid, vector=vector, payload=payload))
+                title = str(p.get("title", "")).strip()
+                uses = smart_split(p.get("uses", ""))
+                side_effects = smart_split(p.get("side_effects", ""))
+                composition = smart_split(p.get("composition", ""))
 
-        if points:
-            client.upsert(collection_name=PRODUCT_CLASS, points=points)
-            total_indexados += len(points)
-            print(f"✅ {len(points)} produtos indexados...")
+                payload = {
+                    "uuid": obj_uuid,
+                    "title": title,
+                    "description": description or "Sem descrição",
+                    "brand": brand or "Desconhecida",
+                    "category": category or "Sem categoria",
+                    "image": url_final,
+                    "url": url,
+                    "price": price,
+                    "priceText": f"{price} Kč" if price > 0 else "Indisponível",
+                    "uses": uses,
+                    "side_effects": side_effects,
+                    "composition": composition,
+                }
+
+                text_to_vectorize = f"{title} {brand} {category} {' '.join(uses)} {' '.join(composition)}"
+                vector = model.encode(text_to_vectorize).tolist()
+
+                points.append(PointStruct(id=obj_uuid, vector=vector, payload=payload))
+
+            if points:
+                client.upsert(collection_name=PRODUCT_CLASS, points=points)
+                total_indexados += len(points)
+                print(f"✅ {len(points)} produtos indexados...")
 
         print(f"\n🚀 Final: {total_indexados} indexados, {total_ignorados} ignorados.")
 

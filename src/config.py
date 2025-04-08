@@ -83,5 +83,5 @@ def create_qdrant_client():
 
 
 # Exporta os clientes como singletons
-weaviate_client = get_client()
+#weaviate_client = get_client()
 qdrant_client = create_qdrant_client()

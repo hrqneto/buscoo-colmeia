@@ -1,5 +1,3 @@
-# src/schemas/product_schema.py
-
 # Campos obrigatórios
 REQUIRED_FIELDS = [
     "title",
@@ -21,36 +19,37 @@ OPTIONAL_FIELDS = [
     "review_negative"
 ]
 
-# Todos os campos esperados
 ALL_FIELDS = REQUIRED_FIELDS + OPTIONAL_FIELDS
 
-# Função de mapeamento inteligente
+# Dicionário de aliases para mapeamento inteligente
+COLUMN_ALIASES = {
+    "title": ["product_name", "title", "product_title", "name"],
+    "price": ["final_price", "price", "selling_price", "valor"],
+    "images": ["image_urls", "main_image", "images", "img"],
+    "brand": ["brand", "marca", "manufacturer"],
+    "category": ["category", "root_category", "category_name"],
+    "url": ["url", "product_url", "link"],
+    "description": ["description", "desc", "product_description"],
+    "composition": ["composition"],
+    "uses": ["uses"],
+    "side_effects": ["side_effects"]
+}
+
 def detectar_e_mapear_colunas(df):
-    # Normaliza colunas para comparar de forma segura
     df.columns = [col.strip().lower() for col in df.columns]
+    original_cols = df.columns.tolist()
 
-    mapeamentos_possiveis = [
-        {
-            'medicine name': 'title',
-            'image url': 'url',
-            'manufacturer': 'brand',
-            'composition': 'composition',
-            'uses': 'uses',
-            'side_effects': 'side_effects'
-        },
-        {
-            'title': 'title',
-            'images': 'images',
-            'selling_price': 'price',
-            'brand': 'brand',
-            'category': 'category',
-            'url': 'url'
-        }
-    ]
+    mapeamento = {}
 
-    for mapping in mapeamentos_possiveis:
-        if all(col in df.columns for col in mapping):
-            print(f"✅ Mapeamento automático encontrado com colunas: {list(mapping.keys())}")
-            return df.rename(columns=mapping), None
+    for campo_padrao, aliases in COLUMN_ALIASES.items():
+        for alias in aliases:
+            if alias in original_cols:
+                mapeamento[alias] = campo_padrao
+                break
 
-    return df, "❌ Nenhum mapeamento conhecido aplicável ao CSV."
+    if not all(field in mapeamento.values() for field in REQUIRED_FIELDS):
+        return df, f"❌ Mapeamento incompleto. Faltam campos obrigatórios: {[f for f in REQUIRED_FIELDS if f not in mapeamento.values()]}"
+
+    print(f"✅ Mapeamento automático aplicado: {mapeamento}")
+    df = df.rename(columns=mapeamento)
+    return df, None

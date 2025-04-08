@@ -25,14 +25,22 @@ s3 = boto3.client(
 async def processar_e_enviar_imagem(url_original: str, uuid: str, tamanho=(700, 700)) -> str:
     try:
         print(f"📥 Baixando imagem: {url_original}")
-
-        async with httpx.AsyncClient() as client:
+        
+        async with httpx.AsyncClient(headers={
+            "User-Agent": "Mozilla/5.0"
+        }) as client:
             resp = await client.get(url_original, timeout=10)
+
 
         if resp.status_code != 200:
             raise Exception("Erro ao baixar imagem")
 
+        print("🔍 Status da imagem:", resp.status_code)
+        
         content_type = resp.headers.get("Content-Type", "")
+        print("🔍 Content-Type:", resp.headers.get("Content-Type"))
+        print(f"🧪 DEBUG: Status code = {resp.status_code}, Content-Type = {content_type}")
+        
         if "image" not in content_type:
             raise Exception(f"URL não é uma imagem: {url_original}")
 
@@ -40,7 +48,7 @@ async def processar_e_enviar_imagem(url_original: str, uuid: str, tamanho=(700, 
 
         # 🛑 Verifica tamanho mínimo antes de redimensionar
         if img.width < 200 or img.height < 200:
-            raise Exception(f"Imagem pequena demais: {img.width}x{img.height}")
+            print(f"⚠️ Imagem pequena ({img.width}x{img.height}), mas será usada mesmo assim.")
 
         img.thumbnail(tamanho)
 
@@ -61,7 +69,7 @@ async def processar_e_enviar_imagem(url_original: str, uuid: str, tamanho=(700, 
 
     except Exception as e:
         print(f"❌ Erro ao processar imagem ({uuid}): {e}")
-        return f"Erro ao processar ou enviar imagem: {str(e)}"
+        raise
 
 # 🔧 Teste isolado
 if __name__ == "__main__":
