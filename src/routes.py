@@ -1,14 +1,17 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Depends, Query, BackgroundTasks
-from weaviate.classes.query import Filter
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks
 from src.services.upload_service import process_and_index_csv
 from src.services.search_service import search_products
-from src.services.weaviate_client import create_weaviate_client
 from src.services.autocomplete_service import get_autocomplete_suggestions
 from src.utils.redis_client import redis_client
-
+from qdrant_client import QdrantClient
 from uuid import uuid4
-
-from src.config import PRODUCT_CLASS
+from src.config import (
+    QDRANT_URL, QDRANT_API_KEY, 
+    R2_ACCESS_KEY, R2_SECRET_KEY, 
+    R2_ENDPOINT_URL, R2_BUCKET_NAME, 
+    PRODUCT_CLASS
+)
+import boto3
 
 router = APIRouter()
 
@@ -27,7 +30,7 @@ async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
         "status": "processing",
         "message": "📦 Arquivo recebido. Processamento iniciado em background."
     }
-    
+
 @router.get("/upload-status/{upload_id}")
 async def get_upload_status(upload_id: str):
     status = await redis_client.get(f"upload:{upload_id}:status")
@@ -40,10 +43,8 @@ async def get_upload_status(upload_id: str):
 
     return {"upload_id": upload_id, "status": status}
 
-
 @router.get("/search")
 def search(query: str):
-    """Endpoint para buscar produtos no Weaviate."""
     try:
         return search_products(query)
     except Exception as e:
@@ -52,45 +53,57 @@ def search(query: str):
 @router.get("/autocomplete")
 async def autocomplete(q: str = Query(..., alias="q")):
     return await get_autocomplete_suggestions(q)
-    
+
 @router.delete("/delete-all")
 async def delete_all_products():
-    """Remove todos os produtos indexados no Weaviate."""
+    """Deleta a coleção 'products' do Qdrant e limpa o bucket R2 da Cloudflare."""
     try:
-        client = create_weaviate_client()
-        collection = client.collections.get(PRODUCT_CLASS)
+        print("🔄 Iniciando processo de exclusão...")
 
-        print(f"🗑️ Tentando deletar todos os produtos da coleção: {PRODUCT_CLASS}")
+        # 🧠 Qdrant
+        qdrant = QdrantClient(
+            url=QDRANT_URL,
+            api_key=QDRANT_API_KEY,
+        )
 
-        total_registros = collection.aggregate.over_all(total_count=True).total_count
-        print(f"🔍 Registros encontrados antes da exclusão: {total_registros}")
+        collections = qdrant.get_collections()
+        collection_names = [c.name for c in collections.collections]
 
-        if total_registros == 0:
-            print("⚠️ Nenhum produto encontrado para deletar.")
-            return {"message": "Nenhum produto encontrado para deletar."}
+        if PRODUCT_CLASS in collection_names:
+            print(f"🧨 Deletando a coleção '{PRODUCT_CLASS}' do Qdrant Cloud...")
+            qdrant.delete_collection(collection_name=PRODUCT_CLASS)
+            print("✅ Coleção deletada com sucesso.")
+        else:
+            print(f"⚠️ A coleção '{PRODUCT_CLASS}' não existe.")
 
-        produtos = collection.query.fetch_objects(limit=total_registros)
-        ids = [obj.uuid for obj in produtos.objects]
+        # 🧼 R2 Cloudflare
+        print("🪣 Conectando ao bucket R2...")
+        s3 = boto3.client(
+            "s3",
+            region_name="auto",
+            endpoint_url=R2_ENDPOINT_URL,
+            aws_access_key_id=R2_ACCESS_KEY,
+            aws_secret_access_key=R2_SECRET_KEY,
+        )
 
-        if not ids:
-            print("⚠️ Nenhum UUID encontrado para exclusão.")
-            return {"message": "Nenhum produto encontrado para deletar."}
+        response = s3.list_objects_v2(Bucket=R2_BUCKET_NAME)
+        deleted_files = []
 
-        batch_size = 100
-        for i in range(0, len(ids), batch_size):
-            batch = ids[i:i + batch_size]
-            collection.data.delete_many(where=Filter.by_id().contains_any(batch))
-            print(f"✅ {len(batch)} produtos deletados...")
+        if "Contents" in response:
+            for obj in response["Contents"]:
+                print(f"❌ Deletando: {obj['Key']}")
+                s3.delete_object(Bucket=R2_BUCKET_NAME, Key=obj["Key"])
+                deleted_files.append(obj["Key"])
+            print("✅ Todos os objetos foram deletados do R2.")
+        else:
+            print("ℹ️ Bucket já estava vazio.")
 
-        total_restante = collection.aggregate.over_all(total_count=True).total_count
-        print(f"✅ Registros restantes após exclusão: {total_restante}")
-
-        deletados = total_registros - total_restante
-        return {"message": f"Deletados {deletados} produtos com sucesso!"}
+        return {
+            "message": f"Coleção '{PRODUCT_CLASS}' e imagens R2 deletadas com sucesso.",
+            "qdrant_deleted": True,
+            "images_deleted": deleted_files
+        }
 
     except Exception as e:
-        print(f"❌ Erro ao deletar os produtos: {e}")
+        print(f"❌ Erro durante exclusão: {e}")
         raise HTTPException(status_code=500, detail=str(e))
-
-    finally:
-        client.close()
