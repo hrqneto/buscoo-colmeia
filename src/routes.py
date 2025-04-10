@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks, Form
 from src.services.upload_service import process_and_index_csv
 from src.services.search_service import search_products
 from src.services.autocomplete_service import get_autocomplete_suggestions
@@ -16,14 +16,14 @@ import boto3
 router = APIRouter()
 
 @router.post("/upload")
-async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...), client_id: str = Form("default")):
     upload_id = str(uuid4())
     file_path = f"temp_{upload_id}.csv"
 
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    background_tasks.add_task(process_and_index_csv, file_path, upload_id)
+    background_tasks.add_task(process_and_index_csv, file_path, upload_id, client_id)
 
     return {
         "upload_id": upload_id,
@@ -51,8 +51,11 @@ def search(query: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/autocomplete")
-async def autocomplete(q: str = Query(..., alias="q")):
-    return await get_autocomplete_suggestions(q)
+async def autocomplete(
+    q: str = Query(..., alias="q"),
+    client_id: str = Query("default", alias="client_id")
+):
+    return await get_autocomplete_suggestions(q, client_id)
 
 @router.delete("/delete-all")
 async def delete_all_products():
