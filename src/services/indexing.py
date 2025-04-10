@@ -16,11 +16,11 @@ import pandas as pd
 from src.schemas.product_schema import ALL_FIELDS
 from src.services.normalizacao_service import normalizar_dataset
 import ast
+from src.utils.embedding_client import encode_text
 
 # 🔧 Configurações carregadas do .env
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
-PRODUCT_CLASS = "products"
 
 # ✅ Verifica se variáveis estão presentes
 if not QDRANT_URL or not QDRANT_API_KEY:
@@ -29,6 +29,19 @@ if not QDRANT_URL or not QDRANT_API_KEY:
 # 🧠 Cliente Qdrant + modelo local
 client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 model = SentenceTransformer("all-MiniLM-L6-v2")
+
+def prepare_row(row: dict) -> dict:
+    # 🧠 Tenta extrair categoria a partir do breadcrumb
+    if not row.get("category") and row.get("breadcrumb"):
+        try:
+            breadcrumb = ast.literal_eval(row["breadcrumb"])
+            if isinstance(breadcrumb, list) and breadcrumb:
+                row["category"] = breadcrumb[-1].strip()
+        except Exception:
+            row["category"] = "Desconhecido"
+
+    # 🧹 Pode adicionar mais normalizações aqui se quiser
+    return row
 
 def safe_parse_images(value):
     if isinstance(value, list):
@@ -52,19 +65,20 @@ def smart_split(text):
     return [p.strip() for p in parts if p.strip()]
 
 # 🚀 Cria coleção no Qdrant (se ainda não existe)
-def create_collection_if_not_exists():
+def create_collection_if_not_exists(collection_name: str):
     collections = client.get_collections().collections
-    if PRODUCT_CLASS not in [c.name for c in collections]:
-        print(f"🧠 Criando coleção '{PRODUCT_CLASS}'...")
+    if collection_name not in [c.name for c in collections]:
+        print(f"🧠 Criando coleção '{collection_name}'...")
         client.create_collection(
-            collection_name=PRODUCT_CLASS,
+            collection_name=collection_name,
             vectors_config=VectorParams(size=384, distance=Distance.COSINE)
         )
     else:
-        print(f"📦 Coleção '{PRODUCT_CLASS}' já existe.")
+        print(f"📦 Coleção '{collection_name}' já existe.")  # ✅ agora usa o argumento certo
+
 
 # 🔎 Cria índices de payload para filtro e visualização na UI do Qdrant
-def create_payload_indexes():
+def create_payload_indexes(collection_name: str):
     index_fields = [
         ("title", models.PayloadSchemaType.KEYWORD),
         ("brand", models.PayloadSchemaType.KEYWORD),
@@ -106,7 +120,7 @@ def create_payload_indexes():
         try:
             print(f"📌 Criando índice para '{field}'...")
             client.create_payload_index(
-                collection_name=PRODUCT_CLASS,
+                collection_name=collection_name,
                 field_name=field,
                 field_schema=field_type
             )
@@ -143,14 +157,16 @@ def check_dataset_schema(products: List[Dict[str, any]], required_fields: List[s
     return True
 
 # 🔁 Função principal de indexação
-async def index_products(products: List[Dict[str, any]]):
+async def index_products(products: List[Dict[str, any]], client_id: str = "default"):
     try:
         products = normalizar_dataset(products)
+        collection_name = client_id if client_id.startswith("store_") else f"store_{client_id}"
+
         if not check_dataset_schema(products):
             return {"error": "Dataset inválido. Faltam colunas obrigatórias."}
         print(f"📊 Quantidade total de produtos no CSV: {len(products)}")
-        create_collection_if_not_exists()
-        create_payload_indexes()
+        create_collection_if_not_exists(collection_name)
+        create_payload_indexes(collection_name)
         print("\n🚀 Iniciando indexação...\n")
         await loading_animation()
 
@@ -165,6 +181,7 @@ async def index_products(products: List[Dict[str, any]]):
             print(f"🔁 Processando batch {i} - {i + len(batch)}")
 
             for p in batch:
+                p = prepare_row(p) 
                 # 🧼 Preenche campos ausentes com valores padrão
                 for col in ALL_FIELDS:
                     if col not in p:
@@ -247,12 +264,12 @@ async def index_products(products: List[Dict[str, any]]):
                 }
 
                 text_to_vectorize = f"{title} {brand} {category} {' '.join(uses)} {' '.join(composition)}"
-                vector = model.encode(text_to_vectorize).tolist()
+                vector = await encode_text(text_to_vectorize)
 
                 points.append(PointStruct(id=obj_uuid, vector=vector, payload=payload))
 
             if points:
-                client.upsert(collection_name=PRODUCT_CLASS, points=points)
+                client.upsert(collection_name=collection_name, points=points)
                 total_indexados += len(points)
                 print(f"✅ {len(points)} produtos indexados...")
 
