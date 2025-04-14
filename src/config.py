@@ -31,7 +31,9 @@ def create_qdrant_client():
         print(f"🔍 Conectando ao Qdrant: {QDRANT_URL}")
         client = QdrantClient(
             url=QDRANT_URL,
-            api_key=QDRANT_API_KEY
+            api_key=QDRANT_API_KEY,
+            prefer_grpc=False,
+            https= True
         )
         print("✅ Conectado ao Qdrant com sucesso!")
         return client
