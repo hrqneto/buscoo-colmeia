@@ -5,13 +5,17 @@ from src.services.autocomplete_service import get_autocomplete_suggestions
 from src.utils.redis_client import redis_client
 from qdrant_client import QdrantClient
 from uuid import uuid4
+import boto3
+from src.services.feed_url_service import process_feed_url
+from src.schemas.feed_schema import FeedURLRequest
+import json
+
 from src.config import (
     QDRANT_URL, QDRANT_API_KEY, 
     R2_ACCESS_KEY, R2_SECRET_KEY, 
     R2_ENDPOINT_URL, R2_BUCKET_NAME, 
     PRODUCT_CLASS
 )
-import boto3
 
 router = APIRouter()
 
@@ -33,15 +37,29 @@ async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
 
 @router.get("/upload-status/{upload_id}")
 async def get_upload_status(upload_id: str):
-    status = await redis_client.get(f"upload:{upload_id}:status")
-
-    if status is None:
+    raw = await redis_client.get(f"upload:{upload_id}:status")
+    if raw is None:
         raise HTTPException(status_code=404, detail="Upload ID não encontrado")
 
-    if isinstance(status, bytes):
-        status = status.decode()
+    if isinstance(raw, bytes):
+        raw = raw.decode()
 
-    return {"upload_id": upload_id, "status": status}
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        # fallback para formato antigo
+        return {"upload_id": upload_id, "status": raw}
+
+    return {
+        "upload_id": upload_id,
+        "status": data.get("status", "processing"),
+        "step": data.get("step", ""),
+        "progress": data.get("progress", 0)
+    }
+
+@router.post("/upload/url")
+async def subir_via_url(request: FeedURLRequest):
+    return await process_feed_url(request.feed_url, request.client_id)
 
 @router.get("/search")
 def search(query: str):
