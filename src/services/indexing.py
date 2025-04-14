@@ -17,17 +17,12 @@ from src.schemas.product_schema import ALL_FIELDS
 from src.services.normalizacao_service import normalizar_dataset
 import ast
 from src.utils.embedding_client import encode_text
+from src.config import qdrant_client as client
 
 # 🔧 Configurações carregadas do .env
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
 
-# ✅ Verifica se variáveis estão presentes
-if not QDRANT_URL or not QDRANT_API_KEY:
-    raise EnvironmentError("QDRANT_URL e QDRANT_API_KEY precisam estar definidos no .env")
-
-# 🧠 Cliente Qdrant + modelo local
-client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 def prepare_row(row: dict) -> dict:
@@ -80,6 +75,7 @@ def create_collection_if_not_exists(collection_name: str):
 # 🔎 Cria índices de payload para filtro e visualização na UI do Qdrant
 def create_payload_indexes(collection_name: str):
     index_fields = [
+        ("client_id", models.PayloadSchemaType.KEYWORD),
         ("title", models.PayloadSchemaType.KEYWORD),
         ("brand", models.PayloadSchemaType.KEYWORD),
         ("category", models.PayloadSchemaType.KEYWORD),
@@ -160,7 +156,7 @@ def check_dataset_schema(products: List[Dict[str, any]], required_fields: List[s
 async def index_products(products: List[Dict[str, any]], client_id: str = "default"):
     try:
         products = normalizar_dataset(products)
-        collection_name = client_id if client_id.startswith("store_") else f"store_{client_id}"
+        collection_name = "store_global"
 
         if not check_dataset_schema(products):
             return {"error": "Dataset inválido. Faltam colunas obrigatórias."}
@@ -172,7 +168,7 @@ async def index_products(products: List[Dict[str, any]], client_id: str = "defau
 
         total_indexados = 0
         total_ignorados = 0
-        batch_size = 50
+        batch_size = 1
         erros = []
         
         for i in range(0, len(products), batch_size):
@@ -250,6 +246,7 @@ async def index_products(products: List[Dict[str, any]], client_id: str = "defau
 
                 payload = {
                     "uuid": obj_uuid,
+                    "client_id": client_id,  # 👈 aqui!
                     "title": title,
                     "description": description or "Sem descrição",
                     "brand": brand or "Desconhecida",
@@ -264,7 +261,11 @@ async def index_products(products: List[Dict[str, any]], client_id: str = "defau
                 }
 
                 text_to_vectorize = f"{title} {brand} {category} {' '.join(uses)} {' '.join(composition)}"
-                vector = await encode_text(text_to_vectorize)
+                try:
+                    vector = await encode_text(text_to_vectorize)
+                except Exception as e:
+                    print(f"⚠️ Erro no microserviço de embedding, usando fallback local: {e}")
+                    vector = model.encode(text_to_vectorize).tolist()
 
                 points.append(PointStruct(id=obj_uuid, vector=vector, payload=payload))
 
