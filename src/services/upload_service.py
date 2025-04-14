@@ -4,6 +4,31 @@ from uuid import uuid4
 from src.services.indexing import index_products
 from src.utils.redis_client import redis_client
 from src.schemas.product_schema import REQUIRED_FIELDS, detectar_e_mapear_colunas
+import json
+
+async def atualizar_status(upload_id: str, status: str, step: str, progress: int):
+    key = f"upload:{upload_id}:status"
+
+    # pega o valor anterior
+    raw = await redis_client.get(key)
+    if raw:
+        data = json.loads(raw)
+        logs = data.get("log", [])
+    else:
+        logs = []
+
+    logs.append({"msg": step, "progress": progress})
+
+    await redis_client.set(
+        key,
+        json.dumps({
+            "status": status,
+            "step": step,
+            "progress": progress,
+            "log": logs,
+        }),
+        ex=3600
+    )
 
 async def process_and_index_csv(file_path: str, upload_id: str, client_id: str = "default"):
     print(f"📂 Começando processamento do CSV: {file_path} (upload_id={upload_id}, client_id={client_id})")
@@ -11,7 +36,7 @@ async def process_and_index_csv(file_path: str, upload_id: str, client_id: str =
     file_path = f"temp_{upload_id}.csv"
 
     try:
-        await redis_client.set(f"upload:{upload_id}:status", "processing", ex=3600)
+        await atualizar_status(upload_id, "processing", "📂 Lendo arquivo CSV", 10)
 
         # 🔎 Tenta múltiplos encodings
         encodings = ['utf-8-sig', 'utf-8', 'latin-1', 'iso-8859-1', 'windows-1252']
@@ -34,19 +59,20 @@ async def process_and_index_csv(file_path: str, upload_id: str, client_id: str =
                 continue
 
         if df is None:
-            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            await atualizar_status(upload_id, "processing", "🔍 Mapeando colunas", 25)
             print("❌ Falha ao decodificar o arquivo.")
             return {"error": "Falha ao decodificar o arquivo (encoding não reconhecido)"}
 
         if df.empty:
-            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            await atualizar_status(upload_id, "processing", "✅ Validando campos", 40)
             print("❌ CSV está vazio após leitura. Verifique a estrutura.")
             return {"error": "CSV está vazio."}
 
         # 🔍 Mapeia colunas
         df, erro_mapeamento = detectar_e_mapear_colunas(df)
         if erro_mapeamento:
-            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            await atualizar_status(upload_id, "processing", "📂 Lendo arquivo CSV", 10)
+    
             print(erro_mapeamento)
             return {"error": erro_mapeamento}
 
@@ -55,7 +81,7 @@ async def process_and_index_csv(file_path: str, upload_id: str, client_id: str =
             faltando = [col for col in REQUIRED_FIELDS if col not in df.columns]
             msg = f"❌ Faltam colunas obrigatórias: {faltando}"
             print(msg)
-            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            await atualizar_status(upload_id, "processing", "📂 Lendo arquivo CSV", 10)
             return {"error": msg}
 
         # 💸 Conversão de preço
@@ -78,11 +104,11 @@ async def process_and_index_csv(file_path: str, upload_id: str, client_id: str =
         try:
             response = await index_products(df.to_dict(orient="records"), client_id=client_id)
         except Exception as e:
-            await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+            await atualizar_status(upload_id, "processing", "📂 Lendo arquivo CSV", 10)
             print(f"❌ Erro durante indexação: {e}")
             return {"error": str(e)}
 
-        await redis_client.set(f"upload:{upload_id}:status", "done", ex=3600)
+        await atualizar_status(upload_id, "processing", "📂 Lendo arquivo CSV", 10)
 
         return {
             "upload_id": upload_id,
@@ -95,7 +121,7 @@ async def process_and_index_csv(file_path: str, upload_id: str, client_id: str =
         }
 
     except Exception as e:
-        await redis_client.set(f"upload:{upload_id}:status", "failed", ex=3600)
+        await atualizar_status(upload_id, "processing", "📂 Lendo arquivo CSV", 10)
         print(f"❌ Erro geral no processamento: {e}")
         return {"upload_id": upload_id, "error": f"Erro interno: {str(e)}"}
 
