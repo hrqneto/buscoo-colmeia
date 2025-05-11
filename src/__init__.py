@@ -1,2 +1,1 @@
-from .config import *
-from .routes import router
+# src/__init__.py
