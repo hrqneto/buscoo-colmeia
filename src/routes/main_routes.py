@@ -1,29 +1,34 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks, Form
 from src.services.upload_service import process_and_index_csv
 from src.services.search_service import search_products
 from src.services.autocomplete_service import get_autocomplete_suggestions
 from src.utils.redis_client import redis_client
 from qdrant_client import QdrantClient
 from uuid import uuid4
+import boto3
+from src.services.feed_url_service import process_feed_url
+from src.schemas.feed_schema import FeedURLRequest
+import json
+
 from src.config import (
     QDRANT_URL, QDRANT_API_KEY, 
     R2_ACCESS_KEY, R2_SECRET_KEY, 
     R2_ENDPOINT_URL, R2_BUCKET_NAME, 
     PRODUCT_CLASS
 )
-import boto3
-
+from src.routes.auth_routes import router_auth
 router = APIRouter()
+router.include_router(router_auth)
 
 @router.post("/upload")
-async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...)):
+async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...), client_id: str = Form("default")):
     upload_id = str(uuid4())
     file_path = f"temp_{upload_id}.csv"
 
     with open(file_path, "wb") as f:
         f.write(await file.read())
 
-    background_tasks.add_task(process_and_index_csv, file_path, upload_id)
+    background_tasks.add_task(process_and_index_csv, file_path, upload_id, client_id)
 
     return {
         "upload_id": upload_id,
@@ -33,15 +38,41 @@ async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
 
 @router.get("/upload-status/{upload_id}")
 async def get_upload_status(upload_id: str):
-    status = await redis_client.get(f"upload:{upload_id}:status")
+    raw_status = await redis_client.get(f"upload:{upload_id}:status")
 
-    if status is None:
+    if raw_status is None:
         raise HTTPException(status_code=404, detail="Upload ID não encontrado")
 
-    if isinstance(status, bytes):
-        status = status.decode()
+    if isinstance(raw_status, bytes):
+        raw_status = raw_status.decode()
 
-    return {"upload_id": upload_id, "status": status}
+    try:
+        parsed = json.loads(raw_status)
+    except json.JSONDecodeError:
+        parsed = {"status": raw_status, "step": "", "progress": 0}
+
+    return parsed
+
+@router.post("/upload/url")
+async def subir_via_url(request: FeedURLRequest):
+    return await process_feed_url(request.feed_url, request.client_id)
+
+async def cancelar_upload(upload_id: str):
+    key = f"upload:{upload_id}:status"
+    data = {
+        "status": "cancelled",
+        "step": "🛑 Cancelado pelo usuário",
+        "progress": 0,
+        "log": [{"msg": "🛑 Cancelado pelo usuário", "progress": 0}]
+    }
+    await redis_client.set(key, json.dumps(data), ex=600)
+
+# ⬇️ Depois, sua rota
+@router.post("/upload-cancel/{upload_id}")
+async def cancelar(upload_id: str):
+    await cancelar_upload(upload_id)
+    return {"status": "cancelled", "upload_id": upload_id}
+
 
 @router.get("/search")
 def search(query: str):
@@ -51,8 +82,11 @@ def search(query: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/autocomplete")
-async def autocomplete(q: str = Query(..., alias="q")):
-    return await get_autocomplete_suggestions(q)
+async def autocomplete(
+    q: str = Query(..., alias="q"),
+    client_id: str = Query("default", alias="client_id")
+):
+    return await get_autocomplete_suggestions(q, client_id)
 
 @router.delete("/delete-all")
 async def delete_all_products():

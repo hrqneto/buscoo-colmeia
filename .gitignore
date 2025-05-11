@@ -8,3 +8,5 @@ src/data/
 #arquivos ddo servico indexing
 temp_*.csv
 report.csv
+
+secrets/

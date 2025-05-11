@@ -2,7 +2,7 @@ import json
 import math
 import logging
 from fastapi import HTTPException
-from src.services.embedding_service import encode_text
+from src.utils.embedding_client import encode_text
 from src.utils.redis_client import redis_client
 from src.services.qdrant_client import qdrant
 from collections import Counter
@@ -126,7 +126,7 @@ async def fix_product_image(product: dict) -> dict:
         product["image"] = extracted if extracted else "https://via.placeholder.com/150?text=Sem+Imagem"
     return product
 
-async def get_autocomplete_suggestions(q: str):
+async def get_autocomplete_suggestions(q: str, client_id: str = "default"):
     start = time.perf_counter()
     if not q:
         raise HTTPException(status_code=400, detail="Query 'q' é obrigatória")
@@ -164,7 +164,7 @@ async def get_autocomplete_suggestions(q: str):
                     return data
 
         q_clean = q.strip().lower()
-        vector = encode_text(q_clean)
+        vector = await encode_text(q_clean)
         q_length = len(q_clean)
         threshold = 0.05
         hnsw = 128
@@ -176,9 +176,9 @@ async def get_autocomplete_suggestions(q: str):
         # ⚠️ Manter como está por ora — estável e funcional com a versão atual.
 
         search_args = {
-            "collection_name": "products",
+            "collection_name": f"{client_id}",
             "query_vector": vector,
-            "limit": 5,
+            "limit": 7,
             "with_payload": True,
             "search_params": SearchParams(hnsw_ef=hnsw, exact=False),
             "score_threshold": threshold,
@@ -193,18 +193,18 @@ async def get_autocomplete_suggestions(q: str):
         if q_length <= 2:
             min_score = 0.14
         elif q_length <= 4:
-            min_score = 0.15
+            min_score = 0.08
         elif q_length <= 6:
-            min_score = 0.21
+            min_score = 0.13
         else:
-            min_score = 0.34
+            min_score = 0.2
 
         scores = [p.score for p in result]
 
-        allow_one_high = q_length <= 4  # ⚠️ afrouxa pra prefixos curtos
-        if not is_result_relevant(scores, min_score, allow_one_high=allow_one_high):
-            logger.info(f"🔕 Scores fracos (min {round(min(scores), 3)}, média {round(sum(scores)/len(scores), 3)}) — ignorando '{q}'")
-            return suggestions
+    #     allow_one_high = q_length <= 4  # ⚠️ afrouxa pra prefixos curtos
+    #   if not is_result_relevant(scores, min_score, allow_one_high=allow_one_high):
+    #   logger.info(f"🔕 Scores fracos (min {round(min(scores), 3)}, média {round(sum(scores)/len(scores), 3)}) — ignorando '{q}'")
+    #   return suggestions
 
         seen = set()
         raw_products = []
