@@ -1,10 +1,18 @@
-# main.py
+# src/main.py
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from src.routes import router
-from src.utils.redis_client import redis_client
 
-# Cria app FastAPI sem cliente Weaviate
 app = FastAPI()
 
-# Registra rotas da aplicação
-app.include_router(router)
+# ✅ CORSMiddleware primeiro
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["http://localhost:5173"],  # ou ["*"] em dev
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ✅ Inclui rotas após o middleware
+app.include_router(router, prefix="/api")
