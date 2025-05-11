@@ -176,7 +176,7 @@ async def get_autocomplete_suggestions(q: str, client_id: str = "default"):
         # ⚠️ Manter como está por ora — estável e funcional com a versão atual.
 
         search_args = {
-            "collection_name": f"store_{client_id}",
+            "collection_name": f"{client_id}",
             "query_vector": vector,
             "limit": 7,
             "with_payload": True,
@@ -198,7 +198,6 @@ async def get_autocomplete_suggestions(q: str, client_id: str = "default"):
             min_score = 0.13
         else:
             min_score = 0.2
-
 
         scores = [p.score for p in result]
 
