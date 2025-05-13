@@ -5,14 +5,17 @@ from firebase_admin import firestore
 
 router_protected = APIRouter()
 
-
 @router_protected.get("/users/me")
 async def get_profile(user=Depends(verify_token)):
     return {
         "uid": user["uid"],
-        "email": user.get("email")
+        "email": user.get("email"),
+        "name": user.get("name", "Usuário BuscaFlex"),
+        "company_name": user.get("company_name", "Minha Empresa"),
+        "phone": user.get("phone", ""),
+        "address": user.get("address", ""),
+        "photo_url": user.get("photo_url", "")
     }
-
 
 @router_protected.get("/admin/configs")
 async def get_admin_configs(user=Depends(verify_token)):
