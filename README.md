@@ -1,6 +1,6 @@
 # 🔍 buscoo - backend Python
 
-Este repositório contém o sistema de **indexação vetorial inteligente** do [BuscaFlex](https://buscaflex.ai), responsável por processar catálogos de produtos (via CSV ou URL), gerar **embeddings com IA** e armazená-los no **Qdrant**, além de gerenciar cache, configurações e busca autocompletável.
+Este repositório contém o sistema de **indexação vetorial inteligente** do [Buscoo](https://buscoo.ai), responsável por processar catálogos de produtos (via CSV ou URL), gerar **embeddings com IA** e armazená-los no **Qdrant**, além de gerenciar cache, configurações e busca autocompletável.
 
 ---
 
@@ -154,7 +154,7 @@ DELETE /api/delete-all
 ## 📦 Estrutura resumida
 
 ```
-buscaflex-indexador/
+buscoo - backend python/
 ├── main.py                    # Entrypoint FastAPI
 ├── Makefile                  # Scripts prontos p/ desenvolvimento
 ├── requirements.txt          # Dependências
