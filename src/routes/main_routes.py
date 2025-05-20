@@ -17,10 +17,11 @@ from src.config import (
     PRODUCT_CLASS
 )
 from src.routes.auth_routes import router_auth
+
 router = APIRouter()
 router.include_router(router_auth)
 
-@router.post("/upload")
+@router.post("/upload", summary="Upload de CSV com produtos", description="Recebe um arquivo CSV e inicia o processamento em segundo plano para indexar os produtos no Qdrant.")
 async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(...), client_id: str = Form("default")):
     upload_id = str(uuid4())
     file_path = f"temp_{upload_id}.csv"
@@ -36,7 +37,7 @@ async def upload_csv(background_tasks: BackgroundTasks, file: UploadFile = File(
         "message": "📦 Arquivo recebido. Processamento iniciado em background."
     }
 
-@router.get("/upload-status/{upload_id}")
+@router.get("/upload-status/{upload_id}", summary="Status do upload", description="Retorna o status do processamento do upload baseado no ID fornecido.")
 async def get_upload_status(upload_id: str):
     raw_status = await redis_client.get(f"upload:{upload_id}:status")
 
@@ -53,7 +54,7 @@ async def get_upload_status(upload_id: str):
 
     return parsed
 
-@router.post("/upload/url")
+@router.post("/upload/url", summary="Upload via URL", description="Recebe uma URL contendo o feed de produtos (CSV ou XML) e inicia o processamento remoto.")
 async def subir_via_url(request: FeedURLRequest):
     return await process_feed_url(request.feed_url, request.client_id)
 
@@ -67,34 +68,30 @@ async def cancelar_upload(upload_id: str):
     }
     await redis_client.set(key, json.dumps(data), ex=600)
 
-# ⬇️ Depois, sua rota
-@router.post("/upload-cancel/{upload_id}")
+@router.post("/upload-cancel/{upload_id}", summary="Cancelar upload", description="Cancela o processamento de um upload já iniciado com base no ID do upload.")
 async def cancelar(upload_id: str):
     await cancelar_upload(upload_id)
     return {"status": "cancelled", "upload_id": upload_id}
 
-
-@router.get("/search")
+@router.get("/search", summary="Busca textual simples", description="Realiza uma busca textual tradicional baseada na query informada (sem vetores).")
 def search(query: str):
     try:
         return search_products(query)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/autocomplete")
+@router.get("/autocomplete", summary="Sugestões de autocomplete", description="Fornece sugestões de produtos, marcas e categorias com base em uma query textual.")
 async def autocomplete(
     q: str = Query(..., alias="q"),
     client_id: str = Query("default", alias="client_id")
 ):
     return await get_autocomplete_suggestions(q, client_id)
 
-@router.delete("/delete-all")
+@router.delete("/delete-all", summary="Resetar base de dados", description="Remove a coleção de produtos do Qdrant e limpa todas as imagens do bucket R2 da Cloudflare.")
 async def delete_all_products():
-    """Deleta a coleção 'products' do Qdrant e limpa o bucket R2 da Cloudflare."""
     try:
         print("🔄 Iniciando processo de exclusão...")
 
-        # 🧠 Qdrant
         qdrant = QdrantClient(
             url=QDRANT_URL,
             api_key=QDRANT_API_KEY,
@@ -110,7 +107,6 @@ async def delete_all_products():
         else:
             print(f"⚠️ A coleção '{PRODUCT_CLASS}' não existe.")
 
-        # 🧼 R2 Cloudflare
         print("🪣 Conectando ao bucket R2...")
         s3 = boto3.client(
             "s3",
