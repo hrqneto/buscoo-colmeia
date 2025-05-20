@@ -3,7 +3,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from src.routes import router
 
-app = FastAPI()
+app = FastAPI(
+    title="buscoo API",
+    description="API de indexação e autocomplete vetorial para e-commerce. Contém endpoints para upload, busca, sugestões e monitoramento de status.",
+    version="1.0.0"
+)
 
 # ✅ CORSMiddleware primeiro
 app.add_middleware(
