@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks, Form
+from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks, Form, Depends
 from src.services.upload_service import process_and_index_csv
 from src.services.search_service import search_products
 from src.services.autocomplete_service import get_autocomplete_suggestions
@@ -9,6 +9,7 @@ import boto3
 from src.services.feed_url_service import process_feed_url
 from src.schemas.feed_schema import FeedURLRequest
 import json
+from src.middleware.auth_middleware import verify_token
 
 from src.config import (
     QDRANT_URL, QDRANT_API_KEY, 
