@@ -2,9 +2,9 @@ import json
 import math
 import logging
 from fastapi import HTTPException
-from src.utils.embedding_client import encode_text
-from src.utils.redis_client import redis_client
-from src.services.qdrant_client import qdrant
+from src.infra.embedding_client import encode_text
+from src.infra.redis_client import redis_client
+from src.infra.qdrant_client import qdrant
 from collections import Counter
 import httpx
 from bs4 import BeautifulSoup
@@ -168,12 +168,6 @@ async def get_autocomplete_suggestions(q: str, client_id: str = "default"):
         q_length = len(q_clean)
         threshold = 0.05
         hnsw = 128
-        
-        # TODO: Atualizar para o novo cliente AsyncQdrantClient com SearchRequest
-        # Substituir qdrant.search(**search_args) por:
-        # await qdrant.search("products", SearchRequest(...))
-        # Requer migrar para qdrant-client 1.6+ com modelos http.models (assíncronos)
-        # ⚠️ Manter como está por ora — estável e funcional com a versão atual.
 
         search_args = {
             "collection_name": f"{client_id}",
@@ -199,53 +193,49 @@ async def get_autocomplete_suggestions(q: str, client_id: str = "default"):
         else:
             min_score = 0.2
 
-        scores = [p.score for p in result]
-
-    #     allow_one_high = q_length <= 4  # ⚠️ afrouxa pra prefixos curtos
-    #   if not is_result_relevant(scores, min_score, allow_one_high=allow_one_high):
-    #   logger.info(f"🔕 Scores fracos (min {round(min(scores), 3)}, média {round(sum(scores)/len(scores), 3)}) — ignorando '{q}'")
-    #   return suggestions
-
         seen = set()
-        raw_products = []
         seen_titles = set()
+        raw_products = []
+
         for p in result:
-            url = p.payload.get("url", "")
-            if url in seen:
+            payload = p.payload or {}
+            url = payload.get("url", "")
+            title = payload.get("title", "")
+
+            if url in seen or title in seen_titles:
                 continue
             seen.add(url)
-            
-            title = p.payload.get("title", "")
-            if title in seen_titles:
-                continue
             seen_titles.add(title)
 
             score = p.score
-            logger.info(f"[similaridade] Score para '{p.payload.get('title', '')}': {score}")
+            logger.info(f"[similaridade] Score para '{title}': {score}")
+
+            # Conversão segura de price para float
+            raw_price = payload.get("price", 0)
+            try:
+                price = float(raw_price)
+            except (ValueError, TypeError):
+                price = 0.0
 
             product_data = {
-                "title": p.payload.get("title", ""),
-                "price": p.payload.get("price", 0),
-                "priceText": p.payload.get("priceText", "Indisponível"),
-                "brand": p.payload.get("brand", ""),
-                "category": p.payload.get("category", ""),
-                "image": p.payload.get("image", ""),
-                "url": p.payload.get("url", ""),
+                "title": title,
+                "price": price,
+                "priceText": payload.get("priceText", "Indisponível"),
+                "brand": payload.get("brand", ""),
+                "category": payload.get("category", ""),
+                "image": payload.get("image", ""),
+                "url": url,
             }
 
             raw_products.append(product_data)
 
-        # 👇 Carrega imagens em paralelo
         products = await asyncio.gather(*[fix_product_image(p) for p in raw_products])
 
-        # 👇 Gera listas únicas de categorias e marcas
         categories = list({p["category"] for p in products if p["category"]})
         brands = list({p["brand"] for p in products if p["brand"]})
 
-        # 👇 Adiciona no JSON final
         suggestions["catalogues"] = [{"name": c} for c in categories]
         suggestions["brands"] = [{"name": b} for b in brands]
-
         suggestions["products"] = products
         suggestions["total"]["product"] = len(products)
         suggestions["suggestionsFound"] = bool(products)
@@ -257,14 +247,97 @@ async def get_autocomplete_suggestions(q: str, client_id: str = "default"):
     except Exception as e:
         logger.error(f"❌ Erro no autocomplete: {str(e)}", exc_info=True)
         return suggestions
-    
+
     elapsed = time.perf_counter() - start
     logger.info(f"⏱️ Tempo total de autocomplete('{q}'): {elapsed:.3f}s")
 
     return suggestions
 
-    #TODO 3. Adicionar um limit/delay para scraping de imagem
-    #Quando o scraping for necessário, podemos fazer algo simples 
-    #await asyncio.sleep(0.1)  # delay de 100ms entre requests
-    #Coloca isso dentro da função extract_image_from_url, antes de chamar async_client.get():
-    #response = await async_client.get(url, headers=headers)
+async def get_top_items_from_qdrant(client_id: str) -> dict:
+    try:
+        records = qdrant.scroll(
+            collection_name=client_id,
+            with_payload=True,
+            limit=50
+        )
+
+        products = []
+        brands = set()
+        categories = set()
+
+        for item in records[0]:  # records[0] = lista de pontos
+            payload = item.payload or {}
+            products.append({
+                "title": payload.get("title", ""),
+                "url": payload.get("url", ""),
+                "image": payload.get("image", ""),
+                "priceText": payload.get("priceText", "Indisponível"),
+                "brand": payload.get("brand", ""),
+                "category": payload.get("category", "")
+            })
+            if payload.get("brand"):
+                brands.add(payload["brand"])
+            if payload.get("category"):
+                categories.add(payload["category"])
+
+        return {
+            "products": products[:7],
+            "brands": [{"name": b} for b in list(brands)[:5]],
+            "catalogues": [{"name": c} for c in list(categories)[:5]]
+        }
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar fallback do Qdrant: {e}", exc_info=True)
+        return {}
+
+async def get_initial_autocomplete_suggestions(client_id: str = "default") -> dict:
+    suggestions = {
+        "queries": [],
+        "catalogues": [],
+        "brands": [],
+        "products": [],
+        "total": {"product": 0},
+        "suggestionsFound": False,
+    }
+
+    try:
+        # tentar carregar do Redis
+        top_queries = await redis_client.zrevrange(f"ranking:searches:{client_id}", 0, 5)
+        top_products = await redis_client.lrange(f"ranking:clicks:{client_id}", 0, 5)
+        top_brands = await redis_client.zrevrange(f"ranking:brands:{client_id}", 0, 4)
+        top_categories = await redis_client.zrevrange(f"ranking:categories:{client_id}", 0, 4)
+
+        if top_queries:
+            suggestions["queries"] = [{"query": q.decode()} for q in top_queries]
+            
+        if top_products:
+            parsed_products = [json.loads(p) for p in top_products]
+
+            for prod in parsed_products:
+                if "price" not in prod or not isinstance(prod["price"], (int, float)):
+                    prod["price"] = 0.0
+                if "priceText" not in prod:
+                    prod["priceText"] = "Indisponível"
+
+            suggestions["products"] = parsed_products
+            
+        if top_brands:
+            suggestions["brands"] = [{"name": b.decode()} for b in top_brands]
+            
+        if top_categories:
+            suggestions["catalogues"] = [{"name": c.decode()} for c in top_categories]
+
+        if not suggestions["products"]:
+            fallback = await get_top_items_from_qdrant(client_id)
+            suggestions["products"] = fallback.get("products", [])
+            suggestions["brands"] = fallback.get("brands", [])
+            suggestions["catalogues"] = fallback.get("catalogues", [])
+
+        suggestions["total"]["product"] = len(suggestions["products"])
+        suggestions["suggestionsFound"] = bool(suggestions["products"])
+
+        return suggestions
+
+    except Exception as e:
+        logger.error(f"❌ Erro ao buscar sugestões iniciais: {e}", exc_info=True)
+        return suggestions

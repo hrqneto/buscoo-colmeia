@@ -1,9 +1,9 @@
 import os
 import pandas as pd
 from uuid import uuid4
-from src.services.indexing import index_products
-from src.utils.redis_client import redis_client
-from src.schemas.product_schema import REQUIRED_FIELDS, detectar_e_mapear_colunas
+from src.indexing.services.indexing import index_products
+from src.infra.redis_client import redis_client
+from src.indexing.schemas.product_schema import REQUIRED_FIELDS, detectar_e_mapear_colunas
 import json
 
 async def atualizar_status(upload_id: str, status: str, step: str, progress: int):

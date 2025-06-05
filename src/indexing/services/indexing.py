@@ -4,19 +4,19 @@ import asyncio
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient, models
 from qdrant_client.http.models import PointStruct, VectorParams, Distance
-from src.services.autocomplete_service import extract_image_from_url
-from src.services.image_service import processar_e_enviar_imagem, BUCKET_NAME
+from src.search.services.autocomplete_service import extract_image_from_url
+from src.indexing.services.image_service import processar_e_enviar_imagem, BUCKET_NAME
 from ast import literal_eval
 import csv
-from src.services.validation_service import validar_produto
+from src.indexing.services.validation_service import validar_produto
 from typing import List, Dict, Tuple
-from src.services.relatorio_service import salvar_relatorio_erros
+from src.admin.services.relatorio_service import salvar_relatorio_erros
 import re
 import pandas as pd
-from src.schemas.product_schema import ALL_FIELDS
-from src.services.normalizacao_service import normalizar_dataset
+from src.indexing.schemas.product_schema import ALL_FIELDS
+from src.indexing.services.normalizacao_service import normalizar_dataset
 import ast
-from src.utils.embedding_client import encode_text
+from src.infra.embedding_client import encode_text
 from src.config import qdrant_client as client
 
 # 🔧 Configurações carregadas do .env

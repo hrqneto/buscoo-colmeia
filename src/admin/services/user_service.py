@@ -1,5 +1,5 @@
 # src/services/user_service.py
-from src.utils.firestore_client import db
+from src.infra.firestore_client import db
 
 def create_default_user_if_not_exists(user_data):
     doc_ref = db.collection("users").document(user_data["uid"])

@@ -1,13 +1,14 @@
+#TODO modularizar as rotas  
 from fastapi import APIRouter, HTTPException, UploadFile, File, Query, BackgroundTasks, Form, Depends
-from src.services.upload_service import process_and_index_csv
-from src.services.search_service import search_products
-from src.services.autocomplete_service import get_autocomplete_suggestions
-from src.utils.redis_client import redis_client
+from src.indexing.services.upload_service import process_and_index_csv
+from src.search.services.search_service import search_products
+from src.search.services.autocomplete_service import get_autocomplete_suggestions, get_initial_autocomplete_suggestions
+from src.infra.redis_client import redis_client
 from qdrant_client import QdrantClient
 from uuid import uuid4
 import boto3
-from src.services.feed_url_service import process_feed_url
-from src.schemas.feed_schema import FeedURLRequest
+from src.indexing.services.feed_url_service import process_feed_url
+from src.indexing.schemas.feed_schema import FeedURLRequest
 import json
 from src.middleware.auth_middleware import verify_token
 
@@ -17,7 +18,7 @@ from src.config import (
     R2_ENDPOINT_URL, R2_BUCKET_NAME, 
     PRODUCT_CLASS
 )
-from src.routes.auth_routes import router_auth
+from src.admin.routes.auth_routes import router_auth
 
 router = APIRouter()
 router.include_router(router_auth)
@@ -87,6 +88,17 @@ async def autocomplete(
     client_id: str = Query("default", alias="client_id")
 ):
     return await get_autocomplete_suggestions(q, client_id)
+
+@router.get(
+    "/autocomplete/suggestions",
+    summary="Sugestões iniciais de autocomplete",
+    description="Retorna sugestões populares de produtos, marcas, categorias e termos buscados antes mesmo do usuário digitar.",
+    tags=["autocomplete"]
+)
+async def autocomplete_suggestions(
+    client_id: str = Query("default", description="Identificador único do cliente")
+):
+    return await get_initial_autocomplete_suggestions(client_id)
 
 @router.delete("/delete-all", summary="Resetar base de dados", description="Remove a coleção de produtos do Qdrant e limpa todas as imagens do bucket R2 da Cloudflare.")
 async def delete_all_products():

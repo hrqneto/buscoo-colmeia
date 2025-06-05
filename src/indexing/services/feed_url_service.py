@@ -1,7 +1,7 @@
 import httpx
 import tempfile
 from uuid import uuid4
-from src.services.upload_service import process_and_index_csv
+from src.indexing.services.upload_service import process_and_index_csv
 
 async def process_feed_url(feed_url: str, client_id: str = "default"):
     try:

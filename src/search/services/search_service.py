@@ -1,7 +1,7 @@
 import time
 from fastapi import HTTPException
 from transformers import pipeline
-from src.services.weaviate_client import create_weaviate_client
+from src.infra.weaviate_client import create_weaviate_client
 from src.config import PRODUCT_CLASS
 
 # 🔥 Reranker generalista
