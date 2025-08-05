@@ -11,6 +11,7 @@ from src.indexing.services.feed_url_service import process_feed_url
 from src.indexing.schemas.feed_schema import FeedURLRequest
 import json
 from src.middleware.auth_middleware import verify_token
+from firebase_admin import firestore
 
 from src.config import (
     QDRANT_URL, QDRANT_API_KEY, 
@@ -82,24 +83,6 @@ def search(query: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-@router.get("/autocomplete", summary="Sugestões de autocomplete", description="Fornece sugestões de produtos, marcas e categorias com base em uma query textual.")
-async def autocomplete(
-    q: str = Query(..., alias="q"),
-    client_id: str = Query("default", alias="client_id")
-):
-    return await get_autocomplete_suggestions(q, client_id)
-
-@router.get(
-    "/autocomplete/suggestions",
-    summary="Sugestões iniciais de autocomplete",
-    description="Retorna sugestões populares de produtos, marcas, categorias e termos buscados antes mesmo do usuário digitar.",
-    tags=["autocomplete"]
-)
-async def autocomplete_suggestions(
-    client_id: str = Query("default", description="Identificador único do cliente")
-):
-    return await get_initial_autocomplete_suggestions(client_id)
-
 @router.delete("/delete-all", summary="Resetar base de dados", description="Remove a coleção de produtos do Qdrant e limpa todas as imagens do bucket R2 da Cloudflare.")
 async def delete_all_products():
     try:
@@ -150,3 +133,38 @@ async def delete_all_products():
     except Exception as e:
         print(f"❌ Erro durante exclusão: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+@router.get("/autocomplete", summary="Sugestões de autocomplete", description="Fornece sugestões de produtos, marcas e categorias com base em uma query textual.")
+async def autocomplete(
+    q: str = Query(..., alias="q"),
+    client_id: str = Query("default", alias="client_id")
+):
+    return await get_autocomplete_suggestions(q, client_id)
+
+@router.get(
+    "/autocomplete/suggestions",
+    summary="Sugestões iniciais de autocomplete",
+    description="Retorna sugestões populares de produtos, marcas, categorias e termos buscados antes mesmo do usuário digitar.",
+    tags=["autocomplete"]
+)
+async def autocomplete_suggestions(
+    client_id: str = Query("default", description="Identificador único do cliente")
+):
+    return await get_initial_autocomplete_suggestions(client_id)
+
+@router.get("/widget/autocomplete-config")
+async def get_autocomplete_config(client_id: str = Query(..., description="Identificador único do cliente")):
+    db = firestore.client()
+    config_doc = db.collection("configs").document(client_id).get()
+
+    if not config_doc.exists:
+        raise HTTPException(status_code=404, detail="Configuração não encontrada")
+
+    autocomplete = config_doc.to_dict().get("autocomplete", {})
+    is_enabled = autocomplete.get("is_enabled", False)
+
+    return {
+        "enabled": is_enabled,
+        "published": autocomplete.get("published", {})
+    }
+    
