@@ -314,8 +314,11 @@ async def get_initial_autocomplete_suggestions(client_id: str = "default") -> di
             parsed_products = [json.loads(p) for p in top_products]
 
             for prod in parsed_products:
-                if "price" not in prod or not isinstance(prod["price"], (int, float)):
+                try:
+                    prod["price"] = float(prod.get("price", 0))
+                except (ValueError, TypeError):
                     prod["price"] = 0.0
+
                 if "priceText" not in prod:
                     prod["priceText"] = "Indisponível"
 
