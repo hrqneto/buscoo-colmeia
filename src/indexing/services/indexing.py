@@ -18,12 +18,30 @@ from src.indexing.services.normalizacao_service import normalizar_dataset
 import ast
 from src.infra.embedding_client import encode_text
 from src.config import qdrant_client as client
+from firebase_admin import firestore
 
 # 🔧 Configurações carregadas do .env
 QDRANT_URL = os.getenv("QDRANT_URL")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY")
+### CONSTANTES ###
+DEFAULT_AUTOCOMPLETE_CONFIG = {
+    "draft": {
+        "colors": {
+            "main": "#000000",
+            "background": "#FFFFFF",
+            "highlight": "#FF0000"
+        },
+        "blocks": [
+            {"type": "products", "limit": 6},
+            {"type": "categories", "limit": 4},
+            {"type": "brands", "limit": 4}
+        ]
+    },
+    "published": {},
+    "is_enabled": False
+}
 
-model = SentenceTransformer("all-MiniLM-L6-v2")
+model = SentenceTransformer("all-MiniLM-L6-v2", device="cpu")
 
 def prepare_row(row: dict) -> dict:
     # 🧠 Tenta extrair categoria a partir do breadcrumb
@@ -155,14 +173,42 @@ def check_dataset_schema(products: List[Dict[str, any]], required_fields: List[s
 # 🔁 Função principal de indexação
 async def index_products(products: List[Dict[str, any]], client_id: str = "default"):
     try:
+        # Normaliza dataset
         products = normalizar_dataset(products)
-        collection_name = "store_global"
 
+        # Define collection name = client_id
+        collection_name = client_id
+
+        # 🚀 Garante que configs/{client_id} existe no Firestore
+        db = firestore.client()
+
+        user_doc = db.collection("users").document(client_id).get()
+        if not user_doc.exists:
+            db.collection("users").document(client_id).set({
+                "uid": client_id,  # neste caso, assumindo client_id == uid, você pode mudar isso
+                "email": "",
+                "role": "admin",
+                "clientId": client_id
+            })
+
+        # 🚀 Garante que configs/{client_id} existe no Firestore
+        config_ref = db.collection("configs").document(client_id)
+        if not config_ref.get().exists:
+            print(f"🧠 Criando configs padrão para {client_id}...")
+            config_ref.set({
+                "autocomplete": DEFAULT_AUTOCOMPLETE_CONFIG
+            })
+
+        # Verifica schema
         if not check_dataset_schema(products):
             return {"error": "Dataset inválido. Faltam colunas obrigatórias."}
+
         print(f"📊 Quantidade total de produtos no CSV: {len(products)}")
+
+        # Cria collection e índices
         create_collection_if_not_exists(collection_name)
         create_payload_indexes(collection_name)
+
         print("\n🚀 Iniciando indexação...\n")
         await loading_animation()
 
@@ -170,22 +216,23 @@ async def index_products(products: List[Dict[str, any]], client_id: str = "defau
         total_ignorados = 0
         batch_size = 1
         erros = []
-        
+
         for i in range(0, len(products), batch_size):
             batch = products[i:i + batch_size]
             points: List[PointStruct] = []
             print(f"🔁 Processando batch {i} - {i + len(batch)}")
 
             for p in batch:
-                p = prepare_row(p) 
-                # 🧼 Preenche campos ausentes com valores padrão
+                p = prepare_row(p)
+
+                # Preenche campos ausentes
                 for col in ALL_FIELDS:
                     if col not in p:
                         p[col] = ""
 
                 valido, motivo = validar_produto(p)
                 print(f"➡️ Produto: {p.get('title', '[sem título]')}")
-                
+
                 if not valido:
                     erros.append({
                         "produto": p.get("title", ""),
@@ -203,7 +250,6 @@ async def index_products(products: List[Dict[str, any]], client_id: str = "defau
                 images = safe_parse_images(p.get("images", []))
                 print(f"✅ Lista final de imagens ({len(images)}): {images}")
 
-                # 🧼 Filtra apenas URLs de imagem válidas
                 valid_images = [img for img in images if isinstance(img, str) and img.startswith("http") and img.lower().endswith((".jpg", ".jpeg", ".png"))]
 
                 if not valid_images:
@@ -246,7 +292,7 @@ async def index_products(products: List[Dict[str, any]], client_id: str = "defau
 
                 payload = {
                     "uuid": obj_uuid,
-                    "client_id": client_id,  # 👈 aqui!
+                    "client_id": client_id,
                     "title": title,
                     "description": description or "Sem descrição",
                     "brand": brand or "Desconhecida",
@@ -261,6 +307,7 @@ async def index_products(products: List[Dict[str, any]], client_id: str = "defau
                 }
 
                 text_to_vectorize = f"{title} {brand} {category} {' '.join(uses)} {' '.join(composition)}"
+
                 try:
                     vector = await encode_text(text_to_vectorize)
                 except Exception as e:
@@ -285,6 +332,7 @@ async def index_products(products: List[Dict[str, any]], client_id: str = "defau
             "adicionados": total_indexados,
             "ignorados": total_ignorados
         }
+
     except Exception as e:
         print(f"❌ Erro ao indexar produtos: {e}")
         return {"error": str(e)}
