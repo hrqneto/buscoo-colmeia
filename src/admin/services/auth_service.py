@@ -3,6 +3,11 @@ import os
 
 FIREBASE_API_KEY = os.getenv("FIREBASE_API_KEY")
 
+# TODO: [FALLBACK] Adicionar plano B caso o Firebase esteja fora do ar (ex: 503 ou UNAVAILABLE).
+# - Podemos tentar cachear tokens válidos recentes
+# - Ou permitir login local temporário (modo offline seguro)
+# - Ou redirecionar para um serviço alternativo de autenticação
+    
 async def firebase_login(email: str, password: str):
     url = f"https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key={FIREBASE_API_KEY}"
     payload = {
